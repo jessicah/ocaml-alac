@@ -33,3 +33,9 @@ let to_element = function
 	| 7 -> END
 	| n -> failf "invalid element type: %d" n
 
+(* link in the other modules until have a full decoder and don't need this hack :p *)
+
+open BitBuffer
+open ArrayTypes
+open DynamicPredictor
+open Matrix
