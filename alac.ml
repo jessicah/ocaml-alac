@@ -39,3 +39,4 @@ open BitBuffer
 open ArrayTypes
 open DynamicPredictor
 open Matrix
+open AdaptiveGolomb
