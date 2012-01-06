@@ -15,6 +15,15 @@ let get bits offset =
 let create buffer byte_size =
 	{ buffer = buffer; current = 0; bit_index = 0; byte_size = byte_size }
 
+let from_bitstring (buffer,ofs,len) =
+	{ buffer = buffer;
+		current = ofs land (lnot 7);
+		bit_index = ofs land 7;
+		byte_size = len / 8 }
+
+let copy { buffer; current; bit_index; byte_size } =
+	{ buffer; current; bit_index; byte_size }
+
 let read bits num_bits =
 	let result = ((get bits 0) lsl 16) lor ((get bits 1) lsl 8) lor ((get bits 2)) in
 	let result = result lsl bits.bit_index in
