@@ -122,10 +122,118 @@ let rec init bits =
 			avg_bit_rate = avg_bit_rate;
 			sample_rate = sample_rate;
 		})
-	| { _ } -> failf "Couldn't find valid ALAC cookie"
+	| { _ } -> failwith "alac: missing/invalid cookie"
+
+let fill_element bits =
+	let count = match BitBuffer.read_small bits 4 with
+	| 15 -> 15 + BitBuffer.read_small bits 8 - 1
+	| n -> n
+	in
+	BitBuffer.advance bits (count * 8)
+
+let data_stream_element bits =
+	let element_instance_tag = BitBuffer.read_small bits 4 in
+	let data_byte_align_flag = BitBuffer.read_one bits in
+	let count = match BitBuffer.read_small bits 8 with
+	| 255 -> 255 + BitBuffer.read_small bits 8
+	| n -> n
+	in
+	if data_byte_align_flag <> 0 then BitBuffer.byte_align bits false;
+	BitBuffer.advance bits (count * 8)
+
+let zero16 (buffer : ArrayTypes.int16a) num_items stride =
+	failwith "alac: shouldn't need; only dealing with stereo files"
+
+(* globals *)
+
+let config = ref {
+	frame_length = 0l;
+	bit_depth = 0; pb = 0; mb = 0; kb = 0;
+	num_channels = 0; max_run = 0;
+	max_frame_bytes = 0l;
+	avg_bit_rate = 0l;
+	sample_rate = 0l;
+}
+
+exception Done
+
+(* returns out_num_samples *)
+let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
+	(* samples = ( int16_t* ) sample_buffer *)
+	let num_samples = ref num_samples in
+	try while true do
+		match to_element (BitBuffer.read_small bits 3) with
+		| CPE ->
+			(* stereo channel pair *)
+			let element_instance_tag = BitBuffer.read_small bits 4 in
+			(* don't care about active elements *)
+
+			(* read the 12 unused header bits *)
+			let unused_header = BitBuffer.read bits 12 in
+			(* assert = 0 *)
+
+			(* read the 1-bit "partial frame" flag, 2-bit "shift-off" flag & 1-bit "escape" flag *)
+			let header_byte = BitBuffer.read bits 4 in
+
+			let partial_frame = header_byte lsr 3 in
+			let bytes_shifted = (header_byte lsr 1) land 0x3 in
+			(* assert != 3 *)
+			let shift = bytes_shifted * 8 in
+			let escape_flag = header_byte land 0x1 in
+
+			let chan_bits = 16 - (bytes_shifted * 8) + 1 in
+
+			(* check for partial frame length to override requested num_samples *)
+			if partial_frame <> 0 then begin
+				num_samples := (BitBuffer.read bits 16) lsl 16;
+				num_samples := !num_samples lor BitBuffer.read bits 16;
+			end;
+
+			if escape_flag = 0 then begin
+				(* compressed frame, read rest of parameters *)
+				()
+			end else begin
+				(* uncompressed frame, copy data into the mix buffers to use common output code *)
+				()
+			end;
+
+			(* now read the shifted values into the shift buffer *)
+			if bytes_shifted <> 0 then begin
+				let shift = bytes_shifted * 8 in
+				(* assert <= 16 *)
+
+				(*for i = 0 to !num_samples - 1 do
+					shift_buffer.{i * 2} <- BitBuffer.read shift_bits shift;
+					shift_buffer.{i * 2 + 1} <- BitBuffer.read shift_bits shift;
+				done*) ()
+			end;
+
+			(* un-mix the data and convert to output format *)
+			(* - note that mix_res = 0 means just interleave so we use that path for uncompressed frames *)
+			(*
+				out16 = &((int16_t * )sampleBuffer)[channelIndex];
+				unmix16 mix_buffer_u mix_buffer_v out16 num_channels num_samples mix_bits mix_res
+			*)
+
+			(* *out_num_samples = num_samples *)
+
+			failwith "not done yet"
+		| DSE ->
+			(* data stream element -- parse but ignore *)
+			data_stream_element bits
+		| FIL ->
+			(* fill element -- parse but ignore *)
+			fill_element bits
+		| END ->
+			BitBuffer.byte_align bits false;
+			raise Done
+		| _ -> ()
+	done; !num_samples with Done -> !num_samples
 
 let openfile filename =
 	let cookie, mdat = Mp4.openfile filename in
 	let cookie = init cookie in
 	print_specific_config cookie;
+	(* set up global config *)
+	config := cookie;
 	cookie

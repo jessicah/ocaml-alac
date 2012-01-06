@@ -74,9 +74,9 @@ let show_sample_description bits =
 		_ : 16;
 		cookie : -1 : bitstring }
 	->
-		printf "format id = %s, channels = %d, bitrate = %d, sample rate = %d\n"
+		Printf.printf "format id = %s, channels = %d, bitrate = %d, sample rate = %d\n"
 			format_id channels_per_frame bits_per_channel sample_rate
-	| { _ } -> printf "invalid sample description"
+	| { _ } -> Printf.printf "invalid sample description"
 
 let check_sample_description bits =
 	bitmatch bits with
@@ -115,11 +115,15 @@ let openfile filename =
 
 (* this stuff is useful for debugging layout of mp4 container *)
 
+type action = Recurse | Display of (bitstring -> unit)
+
+open Hashtbl
+
+let actions = Hashtbl.create 10
+
 let () =
 	(* register some actions for some boxes *)
-	add actions "ftyp" (Display filetype);
 	add actions "moov" Recurse;
-	add actions "mdat" (Display media_data);
 	add actions "trak" Recurse;
 	add actions "udta" Recurse;
 	add actions "mdia" Recurse;
@@ -132,18 +136,18 @@ let rec box indent bits =
 	| { 0x0000_l : 32 : bigendian;
 		kind : 32 : string;
 		data : -1 : bitstring }
-	-> printf "%*slast box: %s\n" indent "" kind; action indent kind data
+	-> Printf.printf "%*slast box: %s\n" indent "" kind; action indent kind data
 	| { 0x0001_l : 32 : bigendian;
 		kind : 32 : string;
 		size : 64 : bigendian;
 		data : Int64.to_int size * 8 - 96: bitstring;
 		next : -1 : bitstring }
-	-> printf "%*slarge box: %s, %Ld bytes\n" indent "" kind size; action indent kind data; box indent next
+	-> Printf.printf "%*slarge box: %s, %Ld bytes\n" indent "" kind size; action indent kind data; box indent next
 	| { size : 32 : bigendian;
 		kind : 32 : string;
 		data : Int32.to_int size * 8 - 64 : bitstring;
 		next : -1 : bitstring }
-	-> printf "%*ssmall box: %s, %ld bytes\n" indent "" kind size; action indent kind data; box indent next
+	-> Printf.printf "%*ssmall box: %s, %ld bytes\n" indent "" kind size; action indent kind data; box indent next
 	| { _ } -> ()
 and action indent kind bits =
 	try
