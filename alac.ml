@@ -123,3 +123,9 @@ let rec init bits =
 			sample_rate = sample_rate;
 		})
 	| { _ } -> failf "Couldn't find valid ALAC cookie"
+
+let openfile filename =
+	let cookie, mdat = Mp4.openfile filename in
+	let cookie = init cookie in
+	print_specific_config cookie;
+	cookie

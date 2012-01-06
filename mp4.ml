@@ -1,20 +1,64 @@
 
-(* MP4 : Some stuff? :p *)
+(* MP4 : Parsing the container format *)
 
-open Hashtbl
-open Printf
+open Bitstring
 
-type action = Recurse | Display of (Bitstring.bitstring -> unit)
+let box bits = bitmatch bits with
+	| { 0x0000l : 32 : bigendian;
+		kind : 32 : string;
+		size : 64 : bigendian;
+		data : Int64.to_int size * 8 - 128 : bitstring;
+		rest : -1 : bitstring } ->
+			(* a large box; the Int64.to_int defies purpose of a large box... *)
+			(kind, data, rest)
+	| { 0x0000l : 32 : bigendian;
+		kind : 32 : string;
+		data : -1 : bitstring } ->
+			(* consumes remainder of the file *)
+			(kind, data, empty_bitstring)
+	| { size : 32 : bigendian;
+		kind : 32 : string;
+		data : Int32.to_int size * 8 - 64 : bitstring;
+		rest : -1 : bitstring } ->
+			(* a regular box *)
+			(kind, data, rest)
+	| { _ } -> failwith "mp4: failure parsing box"
 
-let actions = Hashtbl.create 32
+let fullbox bits =
+	let (kind, data, rest) = box bits in
+	bitmatch data with
+	| { version : 8; flags : 24 : bigendian; data' : -1 : bitstring } ->
+		(* data is actually version : flags : data *)
+		(kind, data', version, flags, rest)
+	| { _ } -> failwith "mp4: failure parsing full box"
 
-let filetype bits =
-	()
+let rec boxes bits acc =
+	if bitstring_length bits = 0 then List.rev acc
+	else
+		let (kind, data, rest) = box bits in
+		boxes rest ((kind, data) :: acc)
 
-let media_data bits =
-	()
+let rec find_box kind parent =
+	let children = try boxes parent [] with Failure _ -> [] in
+	let rec loop = function
+		| [] -> None
+		| (k,data) :: _ when k = kind -> Some data
+		| (_,data) :: xs ->
+			let r = find_box kind data in
+			if r = None then loop xs else r
+	in loop children
+let find_box kind parent = match find_box kind parent with
+	| None -> failwith "mp4: unable to find box"
+	| Some box -> box
 
-let sample_description bits =
+(* the proper way to find a nested box rather than find_box above *)
+let rec get_box path bits = match path with
+	| [] -> bits
+	| k :: kinds ->
+		let children = boxes bits [] in
+		get_box kinds (List.assoc k children)
+	
+let show_sample_description bits =
 	bitmatch bits with
 	| { _ : 32; (* version & flags *)
 		0x1l : 32 : bigendian; (* num_entries *)
@@ -31,10 +75,45 @@ let sample_description bits =
 		cookie : -1 : bitstring }
 	->
 		printf "format id = %s, channels = %d, bitrate = %d, sample rate = %d\n"
-			format_id channels_per_frame bits_per_channel sample_rate;
-		let cookie = Alac.init cookie in
-		Alac.print_specific_config cookie
+			format_id channels_per_frame bits_per_channel sample_rate
 	| { _ } -> printf "invalid sample description"
+
+let check_sample_description bits =
+	bitmatch bits with
+	| { _ : 32; (* version & flags *)
+		0x1l : 32 : bigendian; (* num_entries *)
+		_ : 32; (* size *)
+		format_id : 32 : string;
+		_ : 48; (* reserved *)
+		0x1 : 16 : bigendian;
+		_ : 64; (* revision level, vendor, reserved *)
+		num_channels : 16 : bigendian;
+		bits_per_channel : 16 : bigendian;
+		_ : 32; (* compression id, packet size *)
+		sample_rate : 16 : bigendian;
+		_ : 16;
+		cookie : -1 : bitstring }
+			when format_id = "alac" && num_channels = 2
+				&& bits_per_channel = 16 && sample_rate = 44100 ->
+			cookie
+	| { _ } -> failwith "mp4: not a compatible mp4 file; expect alac, 16-bit stereo @ 44100kHz"
+
+let openfile filename =
+	(*
+		ftyp => check it's actually "M4A "
+		moov.trak.mdia.minf.stbl.stsd => parse specific config from this
+		mdat => the actual data
+	*)
+	match boxes (bitstring_of_file filename) [] with
+	| ("ftyp", ftyp) :: ("moov", moov) :: rest
+		when String.sub (string_of_bitstring ftyp) 0 4 = "M4A " ->
+			(*let stsd = find_box "stsd" moov in*)
+			let stsd = get_box ["trak";"mdia";"minf";"stbl";"stsd"] moov in
+			let mdat = List.assoc "mdat" rest in
+			check_sample_description stsd, mdat
+	| _ -> failwith "mp4: unable to parse as an alac media file"
+
+(* this stuff is useful for debugging layout of mp4 container *)
 
 let () =
 	(* register some actions for some boxes *)
@@ -46,7 +125,7 @@ let () =
 	add actions "mdia" Recurse;
 	add actions "minf" Recurse;
 	add actions "stbl" Recurse;
-	add actions "stsd" (Display sample_description)
+	add actions "stsd" (Display show_sample_description)
 
 let rec box indent bits =
 	bitmatch bits with
