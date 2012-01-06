@@ -72,6 +72,21 @@ type specific_config = {
 	sample_rate : int32; (* uint32 *)
 }
 
+let print_specific_config cfg =
+	Printf.printf (
+		"frame length:    %ld\n" ^^
+		"bit depth:       %d\n" ^^
+		"pb:              %d\n" ^^
+		"mb:              %d\n" ^^
+		"kb:              %d\n" ^^
+		"channels:        %d\n" ^^
+		"max run:         %d\n" ^^
+		"max frame bytes: %ld\n" ^^
+		"avg bitrate:     %ld\n" ^^
+		"sample rate:     %ld\n")
+	cfg.frame_length cfg.bit_depth cfg.pb cfg.mb cfg.kb cfg.num_channels
+	cfg.max_run cfg.max_frame_bytes cfg.avg_bit_rate cfg.sample_rate
+
 let rec init bits =
 	bitmatch bits with
 	| { _ : 32 : bitstring; "frma" : 32 : string; _ : 32 : bitstring; rest : -1 : bitstring } ->
