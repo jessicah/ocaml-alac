@@ -148,6 +148,13 @@ let zero16 (buffer : ArrayTypes.int16a) num_items stride =
 
 open Bigarray
 
+let to_hex2 arr =
+	for i = 0 to min (Array1.dim arr - 1) (16 * 8 -1) do
+		if i mod 16 = 0 then Printf.printf "\n";
+		Printf.printf "%02x " arr.{i};
+	done;
+	Printf.printf "\n\n"
+
 let to_hex arr =
 	for i = 0 to Array1.dim arr - 1 do
 		if i mod 16 = 0 then Printf.printf "\n";
@@ -234,8 +241,10 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 
 				Printf.printf "reading %d coefficients for left channel\n%!" num_U;
 				for i = 0 to num_U - 1 do
-					coefs_U.{i} <- BitBuffer.read bits 16;
+					coefs_U.{i} <- (BitBuffer.read bits 16) land 0xFFFF;
+					Printf.printf "%04x " (coefs_U.{i} land 0xffff);
 				done;
+				Printf.printf "\n";
 		
 				let header_byte = BitBuffer.read bits 8 in
 				let mode_V = header_byte lsr 4 in
@@ -248,7 +257,9 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				Printf.printf "reading %d coefficients for right channel\n%!" num_V;
 				for i = 0 to num_U - 1 do
 					coefs_V.{i} <- BitBuffer.read bits 16;
+					Printf.printf "%04x " coefs_V.{i};
 				done;
+				Printf.printf "\n";
 		
 				(* if shift active, skip the interleaved shifted values, but remember where they start *)
 				if bytes_shifted <> 0 then begin
@@ -262,10 +273,12 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				(* dyn_decomp( &agParams, bits, mPredictor, numSamples, chanBits, &bits1 ) *)
 				Printf.printf "decompress and run predictor for left channel...\n%!";
 				AdaptiveGolomb.dyn_decomp ag_params bits !predictor num_samples chan_bits;
+				to_hex2 (BigarrayUtils.int32_to_uint8 !predictor);
 
 				Printf.printf "unblocking... modeU = %d\n%!" mode_U;
 				if mode_U = 0 then begin
 					DynamicPredictor.unpc_block !predictor !mix_buffer_U num_samples coefs_U num_U chan_bits den_shift_U;
+					to_hex2 (BigarrayUtils.int32_to_uint8 !mix_buffer_U);
 				end else begin
 					(* the special "num_active = 31" mode can be done in-place *)
 					DynamicPredictor.unpc_block !predictor !predictor num_samples coefs_U 31 chan_bits 0;
@@ -276,10 +289,12 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				let ag_params = AdaptiveGolomb.make_params !config.mb ((pb * pb_factor_V) / 4) !config.kb num_samples num_samples !config.max_run in
 				Printf.printf "decompress and run predictor for right channel...\n%!";
 				AdaptiveGolomb.dyn_decomp ag_params bits !predictor num_samples chan_bits;
+				to_hex2 (BigarrayUtils.int32_to_uint8 !predictor);
 
 				Printf.printf "unblocking... modeV = %d\n%!" mode_U;
 				if mode_V = 0 then begin
 					DynamicPredictor.unpc_block !predictor !mix_buffer_V num_samples coefs_V num_V chan_bits den_shift_V;
+					to_hex2 (BigarrayUtils.int32_to_uint8 !mix_buffer_V);
 				end else begin
 					DynamicPredictor.unpc_block !predictor !predictor num_samples coefs_V 31 chan_bits 0;
 					DynamicPredictor.unpc_block !predictor !mix_buffer_V num_samples coefs_V num_V chan_bits den_shift_V;
@@ -334,7 +349,7 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 			out_num_samples := num_samples;
 			Printf.printf "processed %d samples\n%!" num_samples;
 			Printf.printf "bitbuffer position: %d.%d\n%!" bits.BitBuffer.current bits.BitBuffer.bit_index;
-			to_hex (Array1.sub sample_buffer 0 num_samples);
+			to_hex2 (Array1.sub sample_buffer 0 num_samples);
 		| DSE ->
 			(* data stream element -- parse but ignore *)
 			Printf.printf "data stream element\n%!";

@@ -85,7 +85,7 @@ for (j = lim; j < num; j++)
 *)
 
 let sign_of_int i =
-let negishift = Int32.shift_right (Int32.neg i) 31 in
+	let negishift = Int32.shift_right_logical (Int32.neg i) 31 in
 	Int32.logor negishift (Int32.shift_right i 31)
 
 let rec loop_while p f = function
@@ -121,7 +121,7 @@ let unpc_block (pc1 : int32a) (out : int32a) num (coefs : int16a) numactive chan
 			let top = out.{j-lim} in
 
 			for k = 0 to numactive - 1 do
-				sum1 := Int32.add !sum1 (Int32.sub (Int32.mul (Int32.of_int coefs.{k}) out.{j-1-k}) top);
+				sum1 := Int32.add !sum1 (Int32.mul (Int32.of_int (coefs.{k})) (Int32.sub out.{j-1-k} top)); (***)
 			done;
 
 			let del = pc1.{j} in
@@ -134,14 +134,14 @@ let unpc_block (pc1 : int32a) (out : int32a) num (coefs : int16a) numactive chan
 				loop_while (fun _ -> !del0 > 0l) (fun k ->
 					let dd = Int32.sub top out.{j-1-k} in
 					let sgn = sign_of_int dd in
-					coefs.{k} <- coefs.{k} - (Int32.to_int sgn);
+					coefs.{k} <- coefs.{k} - (Int32.to_int sgn); (***)
 					del0 := Int32.sub !del0 (Int32.mul (Int32.of_int (numactive - k)) (Int32.shift_right (Int32.mul sgn dd) denshift));
 					) (numactive - 1);
 			end else if sg < 0l then begin
 				loop_while (fun _ -> !del0 < 0l) (fun k ->
 					let dd = Int32.sub top out.{j-1-k} in
 					let sgn = sign_of_int dd in
-					coefs.{k} <- coefs.{k} + (Int32.to_int sgn);
+					coefs.{k} <- coefs.{k} + (Int32.to_int sgn); (***)
 					del0 := Int32.sub !del0 (Int32.mul (Int32.of_int (numactive - k)) (Int32.shift_right (Int32.mul (Int32.neg sgn) dd) denshift));
 					) (numactive - 1);
 			end;
