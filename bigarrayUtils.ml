@@ -19,3 +19,6 @@ let int32_from_string string : ArrayTypes.int32a =
 
 let int32_to_uint16 (ba : ArrayTypes.int32a) : ArrayTypes.uint16a =
 	change_flags ba int16_unsigned (Array1.dim ba * 2)
+
+let uint8_to_int16 (ba : ArrayTypes.uint8a) : ArrayTypes.int16a =
+	change_flags ba int16_signed (Array1.dim ba / 2)

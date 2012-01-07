@@ -132,7 +132,7 @@ let fill_element bits =
 	BitBuffer.advance bits (count * 8)
 
 let data_stream_element bits =
-	let element_instance_tag = BitBuffer.read_small bits 4 in
+	let _ (* element_instance_tag *) = BitBuffer.read_small bits 4 in
 	let data_byte_align_flag = BitBuffer.read_one bits in
 	let count = match BitBuffer.read_small bits 8 with
 	| 255 -> 255 + BitBuffer.read_small bits 8
@@ -172,18 +172,21 @@ exception Done
 (* mix buffers are declared as int32 arrays, as is predictor *)
 (* shift buffer is the predictor as an unsigned 16-bit array type *)
 let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
-	(* samples = ( int16_t* ) sample_buffer *)
-	let num_samples = ref num_samples in
 	let shift_bits = ref (BitBuffer.create "" 0) in
+	let out_num_samples = ref 0 in
+	let coefs_U = Array1.create int16_signed c_layout 32 in
+	let coefs_V = Array1.create int16_signed c_layout 32 in
+	let mix_bits = ref 0 in
+	let mix_res = ref 0 in
 	try while true do
 		match to_element (BitBuffer.read_small bits 3) with
 		| CPE ->
 			(* stereo channel pair *)
-			let element_instance_tag = BitBuffer.read_small bits 4 in
+			let _ (* element_instance_tag *) = BitBuffer.read_small bits 4 in
 			(* don't care about active elements *)
 
 			(* read the 12 unused header bits *)
-			let unused_header = BitBuffer.read bits 12 in
+			let _ (* unused_header *) = BitBuffer.read bits 12 in
 			(* assert = 0 *)
 
 			(* read the 1-bit "partial frame" flag, 2-bit "shift-off" flag & 1-bit "escape" flag *)
@@ -192,34 +195,109 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 			let partial_frame = header_byte lsr 3 in
 			let bytes_shifted = (header_byte lsr 1) land 0x3 in
 			(* assert != 3 *)
-			let shift = bytes_shifted * 8 in
+			(*let shift = bytes_shifted * 8 in (* unused *)*)
 			let escape_flag = header_byte land 0x1 in
 
 			let chan_bits = 16 - (bytes_shifted * 8) + 1 in
 
 			(* check for partial frame length to override requested num_samples *)
-			if partial_frame <> 0 then begin
-				num_samples := (BitBuffer.read bits 16) lsl 16;
-				num_samples := !num_samples lor BitBuffer.read bits 16;
-			end;
+			let num_samples = if partial_frame <> 0 then begin
+					let override = (BitBuffer.read bits 16) lsl 16 in
+					override lor BitBuffer.read bits 16;
+				end else num_samples in
 
 			if escape_flag = 0 then begin
 				(* compressed frame, read rest of parameters *)
-				()
+				mix_bits := BitBuffer.read bits 8;
+				mix_res := BitBuffer.read bits 8;
+
+				let header_byte = BitBuffer.read bits 8 in
+				let mode_U = header_byte lsr 4 in
+				let den_shift_U = header_byte land 0xf in
+
+				let header_byte = BitBuffer.read bits 8 in
+				let pb_factor_U = header_byte lsr 5 in
+				let num_U = header_byte land 0x1f in
+
+				for i = 0 to num_U - 1 do
+					coefs_U.{i} <- BitBuffer.read bits 16;
+				done;
+		
+				(* if shift active, skip the interleaved shifted values, but remember where they start *)
+				if bytes_shifted <> 0 then begin
+					shift_bits := BitBuffer.copy bits;
+					BitBuffer.advance bits (bytes_shifted * 8 * 2 * num_samples);
+				end;
+
+				let header_byte = BitBuffer.read bits 8 in
+				let mode_V = header_byte lsr 4 in
+				let den_shift_V = header_byte land 0xf in
+
+				let header_byte = BitBuffer.read bits 8 in
+				let pb_factor_V = header_byte lsr 5 in
+				let num_V = header_byte land 0x1f in
+
+				for i = 0 to num_U - 1 do
+					coefs_V.{i} <- BitBuffer.read bits 16;
+				done;
+		
+				(* if shift active, skip the interleaved shifted values, but remember where they start *)
+				if bytes_shifted <> 0 then begin
+					shift_bits := BitBuffer.copy bits;
+					BitBuffer.advance bits (bytes_shifted * 8 * 2 * num_samples);
+				end;
+
+				(* decompress and run predictor for "left" channel *)
+				(* set_ag_params( &agParams, mConfig.mb, (pb * pbFactorU) / 4, mConfig.kb, numSamples, numSamples, mConfig.maxRun ) *)
+				(* dyn_decomp( &agParams, bits, mPredictor, numSamples, chanBits, &bits1 ) *)
+
+				if mode_U = 0 then begin
+					DynamicPredictor.unpc_block !predictor !mix_buffer_U num_samples coefs_U num_U chan_bits den_shift_U;
+				end else begin
+					(* the special "num_active = 31" mode can be done in-place *)
+					DynamicPredictor.unpc_block !predictor !predictor num_samples coefs_U 31 chan_bits 0;
+					DynamicPredictor.unpc_block !predictor !mix_buffer_U num_samples coefs_U num_U chan_bits den_shift_U;
+				end;
+
+				(* decompress and run predictor for "right" channel -- U => V *)
+
+				if mode_V = 0 then begin
+					DynamicPredictor.unpc_block !predictor !mix_buffer_V num_samples coefs_V num_V chan_bits den_shift_V;
+				end else begin
+					DynamicPredictor.unpc_block !predictor !predictor num_samples coefs_V 31 chan_bits 0;
+					DynamicPredictor.unpc_block !predictor !mix_buffer_V num_samples coefs_V num_V chan_bits den_shift_V;
+				end;
 			end else begin
 				(* uncompressed frame, copy data into the mix buffers to use common output code *)
-				()
+				let chan_bits = 16 in (* !config.bit_depth *)
+				let shift = 32 - chan_bits in
+				(* if chan_bits <= 16 *)
+				for i = 0 to num_samples - 1 do
+					let value = Int32.of_int (BitBuffer.read bits chan_bits) in
+					let value = Int32.shift_right (Int32.shift_left value shift) shift in
+					!mix_buffer_U.{i} <- value;
+
+					let value = Int32.of_int (BitBuffer.read bits chan_bits) in
+					let value = Int32.shift_right (Int32.shift_left value shift) shift in
+					!mix_buffer_V.{i} <- value;
+				done;
+
+				(* bits1 & bits2 serve no useful purpose *)
+				mix_bits := 0;
+				mix_res := 0;
+				(* bytes_shifted <- 0, if escape_flag = 0 && bytes_shifted <> 0 *)
 			end;
 
 			(* now read the shifted values into the shift buffer *)
-			if bytes_shifted <> 0 then begin
+			(* if escape_flag <> 0, then don't need to shift *)
+			if escape_flag = 0 && bytes_shifted <> 0 then begin
 				let shift = bytes_shifted * 8 in
 				(* assert <= 16 *)
 
-				(*for i = 0 to !num_samples - 1 do
-					shift_buffer.{i * 2} <- BitBuffer.read !shift_bits shift;
-					shift_buffer.{i * 2 + 1} <- BitBuffer.read !shift_bits shift;
-				done*) ()
+				for i = 0 to num_samples - 1 do
+					!shift_buffer.{i * 2}     <- BitBuffer.read !shift_bits shift;
+					!shift_buffer.{i * 2 + 1} <- BitBuffer.read !shift_bits shift;
+				done
 			end;
 
 			(* un-mix the data and convert to output format *)
@@ -228,10 +306,11 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				out16 = &((int16_t * )sampleBuffer)[channelIndex];
 				unmix16 mix_buffer_u mix_buffer_v out16 num_channels num_samples mix_bits mix_res
 			*)
+			let out16 = BigarrayUtils.uint8_to_int16 sample_buffer in
+			Matrix.unmix16 !mix_buffer_U !mix_buffer_V out16 num_channels num_samples !mix_bits !mix_res;
 
 			(* *out_num_samples = num_samples *)
-
-			failwith "not done yet"
+			out_num_samples := num_samples;
 		| DSE ->
 			(* data stream element -- parse but ignore *)
 			data_stream_element bits
@@ -242,7 +321,7 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 			BitBuffer.byte_align bits false;
 			raise Done
 		| _ -> ()
-	done; !num_samples with Done -> !num_samples
+	done; !out_num_samples with Done -> !out_num_samples
 
 let openfile filename =
 	let cookie, mdat = Mp4.openfile filename in
