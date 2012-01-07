@@ -146,6 +146,8 @@ let zero16 (buffer : ArrayTypes.int16a) num_items stride =
 
 (* globals *)
 
+open Bigarray
+
 let config = ref {
 	frame_length = 0l;
 	bit_depth = 0; pb = 0; mb = 0; kb = 0;
@@ -155,12 +157,24 @@ let config = ref {
 	sample_rate = 0l;
 }
 
+let mix_buffer_U = ref (Array1.create int32 c_layout 0)
+let mix_buffer_V = ref (Array1.create int32 c_layout 0)
+let predictor    = ref (Array1.create int32 c_layout 0)
+let shift_buffer = ref (Array1.create int16_unsigned c_layout 0)
+
 exception Done
 
 (* returns out_num_samples *)
+(* since we're only supporting 16-bit audio, we
+	can let sample_buffer be a 16-bit array type *)
+(* unmix16 is only function that uses sample_buffer;
+	takes in mix_buffers U & V *)
+(* mix buffers are declared as int32 arrays, as is predictor *)
+(* shift buffer is the predictor as an unsigned 16-bit array type *)
 let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 	(* samples = ( int16_t* ) sample_buffer *)
 	let num_samples = ref num_samples in
+	let shift_bits = ref (BitBuffer.create "" 0) in
 	try while true do
 		match to_element (BitBuffer.read_small bits 3) with
 		| CPE ->
@@ -203,8 +217,8 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				(* assert <= 16 *)
 
 				(*for i = 0 to !num_samples - 1 do
-					shift_buffer.{i * 2} <- BitBuffer.read shift_bits shift;
-					shift_buffer.{i * 2 + 1} <- BitBuffer.read shift_bits shift;
+					shift_buffer.{i * 2} <- BitBuffer.read !shift_bits shift;
+					shift_buffer.{i * 2 + 1} <- BitBuffer.read !shift_bits shift;
 				done*) ()
 			end;
 
@@ -236,4 +250,11 @@ let openfile filename =
 	print_specific_config cookie;
 	(* set up global config *)
 	config := cookie;
+	(* allocate mix buffers *)
+	mix_buffer_U := Array1.create int32 c_layout (Int32.to_int cookie.frame_length * 4);
+	mix_buffer_V := Array1.create int32 c_layout (Int32.to_int cookie.frame_length * 4);
+	(* allocate dynamic predictor *)
+	predictor := Array1.create int32 c_layout (Int32.to_int cookie.frame_length * 4);
+	(* "shift off" buffer shares memory with predictor buffer *)
+	shift_buffer := BigarrayUtils.int32_to_uint16 !predictor;
 	cookie
