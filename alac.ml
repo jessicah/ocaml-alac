@@ -179,6 +179,7 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 	let mix_bits = ref 0 in
 	let mix_res = ref 0 in
 	try while true do
+		let pb = !config.pb in
 		match to_element (BitBuffer.read_small bits 3) with
 		| CPE ->
 			(* stereo channel pair *)
@@ -249,7 +250,9 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 
 				(* decompress and run predictor for "left" channel *)
 				(* set_ag_params( &agParams, mConfig.mb, (pb * pbFactorU) / 4, mConfig.kb, numSamples, numSamples, mConfig.maxRun ) *)
+				let ag_params = AdaptiveGolomb.make_params !config.mb ((pb * pb_factor_U) / 4) !config.kb num_samples num_samples !config.max_run in
 				(* dyn_decomp( &agParams, bits, mPredictor, numSamples, chanBits, &bits1 ) *)
+				AdaptiveGolomb.dyn_decomp ag_params bits !predictor num_samples chan_bits;
 
 				if mode_U = 0 then begin
 					DynamicPredictor.unpc_block !predictor !mix_buffer_U num_samples coefs_U num_U chan_bits den_shift_U;
@@ -260,6 +263,8 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				end;
 
 				(* decompress and run predictor for "right" channel -- U => V *)
+				let ag_params = AdaptiveGolomb.make_params !config.mb ((pb * pb_factor_V) / 4) !config.kb num_samples num_samples !config.max_run in
+				AdaptiveGolomb.dyn_decomp ag_params bits !predictor num_samples chan_bits;
 
 				if mode_V = 0 then begin
 					DynamicPredictor.unpc_block !predictor !mix_buffer_V num_samples coefs_V num_V chan_bits den_shift_V;
