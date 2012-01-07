@@ -22,7 +22,7 @@ let of_element = function
 	| PCE -> 5
 	| FIL -> 6
 	| END -> 7
-let to_element = function
+let to_element x = match (x land 0x7) with
 	| 0 -> SCE
 	| 1 -> CPE
 	| 2 -> CCE
@@ -180,6 +180,7 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 	let mix_res = ref 0 in
 	try while true do
 		let pb = !config.pb in
+		Printf.printf ".";
 		match to_element (BitBuffer.read_small bits 3) with
 		| CPE ->
 			(* stereo channel pair *)
@@ -187,8 +188,9 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 			(* don't care about active elements *)
 
 			(* read the 12 unused header bits *)
-			let _ (* unused_header *) = BitBuffer.read bits 12 in
+			let unused_header = BitBuffer.read bits 12 in
 			(* assert = 0 *)
+			assert (unused_header = 0);
 
 			(* read the 1-bit "partial frame" flag, 2-bit "shift-off" flag & 1-bit "escape" flag *)
 			let header_byte = BitBuffer.read bits 4 in
@@ -196,6 +198,8 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 			let partial_frame = header_byte lsr 3 in
 			let bytes_shifted = (header_byte lsr 1) land 0x3 in
 			(* assert != 3 *)
+			assert (bytes_shifted <> 3);
+
 			(*let shift = bytes_shifted * 8 in (* unused *)*)
 			let escape_flag = header_byte land 0x1 in
 
@@ -298,6 +302,7 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 			if escape_flag = 0 && bytes_shifted <> 0 then begin
 				let shift = bytes_shifted * 8 in
 				(* assert <= 16 *)
+				assert (shift <= 16);
 
 				for i = 0 to num_samples - 1 do
 					!shift_buffer.{i * 2}     <- BitBuffer.read !shift_bits shift;
@@ -341,4 +346,25 @@ let openfile filename =
 	predictor := Array1.create int32 c_layout (Int32.to_int cookie.frame_length * 4);
 	(* "shift off" buffer shares memory with predictor buffer *)
 	shift_buffer := BigarrayUtils.int32_to_uint16 !predictor;
-	cookie
+	mdat
+
+let to_hex arr =
+	for i = 0 to Array1.dim arr - 1 do
+		if i mod 16 = 0 then Printf.printf "\n";
+		Printf.printf "%02x " arr.{i};
+	done;
+	Printf.printf "\n"
+
+let to_pcm_data filename =
+	let mdat = openfile filename in (* a bitstring... *)
+	let decode_buffer = Array1.create int8_unsigned c_layout (4096 lsl 6) in
+	let bitbuffer = BitBuffer.from_bitstring mdat in
+	Printf.printf "media data length = %d bytes\n" (Bitstring.bitstring_length mdat / 8);
+	let i = ref 1 in
+	while true do
+		decode bitbuffer decode_buffer (Int32.to_int !config.frame_length) !config.num_channels;
+		Printf.printf "decoded buffer %d\n" !i; incr i;
+		to_hex decode_buffer;
+	done
+
+let () = to_pcm_data Sys.argv.(1)
