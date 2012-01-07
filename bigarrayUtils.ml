@@ -25,3 +25,7 @@ let uint8_to_int16 (ba : ArrayTypes.uint8a) : ArrayTypes.int16a =
 
 let int32_to_uint8 (ba : ArrayTypes.int32a) : ArrayTypes.uint8a =
 	change_flags ba int8_unsigned (Array1.dim ba * 4)
+
+external from_string : (int, int8_unsigned_elt) kind -> c_layout layout -> string -> (int, int8_unsigned_elt, c_layout) Array1.t = "caml_ba_from_string"
+
+let from_string s = from_string int8_unsigned c_layout s

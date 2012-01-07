@@ -42,7 +42,7 @@ let std_params ~fw:fw ~sw:sw =
 
 let lead m =
   let rec loop c j =
-    if logand c m <> zero
+    if logand c m <> zero || j = 32
     then j
     else loop (shift_right_logical c 1) (j+1)in
   loop (shift_left one 31) 0
@@ -51,7 +51,7 @@ let lg3a x =
   31 - lead (add x (of_int 3))
 
 let read32bit (buf : uint8a) n =
-  let read32 i s k = add (shift_left (of_int (buf.{n+i})) s) k in
+  let read32 i s k = logor (shift_left (of_int (buf.{n+i})) s) k in
   read32 0 24 (read32 1 16 (read32 2 8 (read32 3 0 zero)))
 
 let get_next_fromlong inlong suff =
@@ -84,8 +84,10 @@ let dyn_get (buf : uint8a) (bitPos : int) (m : int32) (k : int) =
   and streamlong =
     shift_left (read32bit buf (bitPos lsr 3))
       (bitPos land 7) in
+	(*Printf.printf ">>>%!";*)
   let pre = lead (lognot streamlong)
   in
+	(*Printf.printf "<<<%!";*)
   if pre >= max_prefix_16
   then
     let pre = max_prefix_16 in
@@ -97,7 +99,7 @@ let dyn_get (buf : uint8a) (bitPos : int) (m : int32) (k : int) =
     let streamlong = shift_left streamlong (pre + 1) in
     let v = get_next_fromlong streamlong k in
     if v < of_int 2
-    then (bitPos+1, mul (of_int pre) m)
+    then (bitPos-1, mul (of_int pre) m)
     else (bitPos, add (mul (of_int pre) m) (pred v))
 
 let dyn_get_32bit (buf : uint8a) (bitPos : int) (m : int32) (k : int) (maxbits : int) =
@@ -141,18 +143,24 @@ let dyn_decomp params bitstream (pc : int32a) num_samples max_size =
 	let pb_local = params.pb in
 	let kb_local = to_int params.kb in
 	let wb_local = params.wb in
-	let bit_pos = ref 0 in
-	let in' = BigarrayUtils.int32_to_uint8 pc in
+	(*let bit_pos = ref 0 in
+	let in' = BigarrayUtils.int32_to_uint8 pc in*)
+	(* bitstream is a BitBuffer *)
+	let in' = BigarrayUtils.from_string (bitstream.BitBuffer.buffer) in
+	let bit_pos = ref (bitstream.BitBuffer.current + bitstream.BitBuffer.bit_index) in
 	let out = ref 0 in
 	while !c < num_samples do
+		(*Printf.printf "dyn_decomp: %d of %d samples%!" !c num_samples;*)
 		let m = shift_right !mb qbshift in
 		let k = lg3a m in
+		(*Printf.printf " => lg3a%!";*)
 
 		let k = if k < kb_local then k else kb_local in
 		let m = sub (shift_left one k) one in
 		
 		let n = zero in (* dyn_get_32bit (in, &bitPos, m, k, max_size) *)
 		let newpos, n = dyn_get_32bit in' !bit_pos m k max_size in
+		(*Printf.printf " => dyn_get_32bit%!";*)
 		bit_pos := newpos;
 
 		let ndecode = add n !zmode in
@@ -184,18 +192,20 @@ let dyn_decomp params bitstream (pc : int32a) num_samples max_size =
 
 			let n = 0 in (* dyn_get (in, &bitPos, mz, k) *)
 			let newpos, n = dyn_get in' !bit_pos mz k in
+			(*Printf.printf " => dyn_get(%ld)%!" n;*)
 			bit_pos := newpos;
 
-			for j = 0 to to_int n - 1 do
+			begin try for j = 0 to to_int n - 1 do
 				(* *outPtr++ = 0; *)
 				pc.{!out} <- zero; incr out;
 				incr c;
-			done;
+			done; with _ -> () end;
 
 			if n >= 65535l then zmode := zero;
 
 			mb := zero;
 		end;
+		(*Printf.printf ".\n%!";*)
 	done;
 
 	(*BitBuffer.advance bitstream (bit_pos - start_pos)*)

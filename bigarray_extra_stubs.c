@@ -48,3 +48,22 @@ value caml_ba_change_flags(value vb, value vkind, value vlen)
 	CAMLreturn (res);
 	#undef b
 }
+
+/* Bigarray from string */
+CAMLprim value caml_ba_from_string(value vkind, value vlayout, value vstr)
+{
+  intnat dim[CAML_BA_MAX_NUM_DIMS];
+  mlsize_t num_dims;
+  int i, flags;
+
+  num_dims = 1;
+  if (num_dims < 1 || num_dims > CAML_BA_MAX_NUM_DIMS)
+    caml_invalid_argument("Bigarray.create: bad number of dimensions");
+  for (i = 0; i < num_dims; i++) {
+    dim[i] = caml_string_length(vstr);
+    if (dim[i] < 0)
+      caml_invalid_argument("Bigarray.create: negative dimension");
+  }
+  flags = Int_val(vkind) | Int_val(vlayout) | CAML_BA_EXTERNAL;
+  return caml_ba_alloc(flags, num_dims, String_val(vstr), dim);
+}

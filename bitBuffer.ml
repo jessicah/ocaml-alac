@@ -17,7 +17,7 @@ let create buffer byte_size =
 
 let from_bitstring (buffer,ofs,len) =
 	{ buffer = buffer;
-		current = ofs land (lnot 7);
+		current = ofs / 8;
 		bit_index = ofs land 7;
 		byte_size = len / 8 }
 

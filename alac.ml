@@ -22,7 +22,7 @@ let of_element = function
 	| PCE -> 5
 	| FIL -> 6
 	| END -> 7
-let to_element x = match (x land 0x7) with
+let to_element x = match x with
 	| 0 -> SCE
 	| 1 -> CPE
 	| 2 -> CCE
@@ -148,6 +148,13 @@ let zero16 (buffer : ArrayTypes.int16a) num_items stride =
 
 open Bigarray
 
+let to_hex arr =
+	for i = 0 to Array1.dim arr - 1 do
+		if i mod 16 = 0 then Printf.printf "\n";
+		Printf.printf "%02x " arr.{i};
+	done;
+	Printf.printf "\n"
+
 let config = ref {
 	frame_length = 0l;
 	bit_depth = 0; pb = 0; mb = 0; kb = 0;
@@ -180,9 +187,9 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 	let mix_res = ref 0 in
 	try while true do
 		let pb = !config.pb in
-		Printf.printf ".";
-		match to_element (BitBuffer.read_small bits 3) with
+		begin match to_element (BitBuffer.read_small bits 3) with
 		| CPE ->
+			Printf.printf "stereo channel pair...\n%!";
 			(* stereo channel pair *)
 			let _ (* element_instance_tag *) = BitBuffer.read_small bits 4 in
 			(* don't care about active elements *)
@@ -213,6 +220,7 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 
 			if escape_flag = 0 then begin
 				(* compressed frame, read rest of parameters *)
+				Printf.printf "compressed frame...\n%!";
 				mix_bits := BitBuffer.read bits 8;
 				mix_res := BitBuffer.read bits 8;
 
@@ -224,16 +232,11 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				let pb_factor_U = header_byte lsr 5 in
 				let num_U = header_byte land 0x1f in
 
+				Printf.printf "reading %d coefficients for left channel\n%!" num_U;
 				for i = 0 to num_U - 1 do
 					coefs_U.{i} <- BitBuffer.read bits 16;
 				done;
 		
-				(* if shift active, skip the interleaved shifted values, but remember where they start *)
-				if bytes_shifted <> 0 then begin
-					shift_bits := BitBuffer.copy bits;
-					BitBuffer.advance bits (bytes_shifted * 8 * 2 * num_samples);
-				end;
-
 				let header_byte = BitBuffer.read bits 8 in
 				let mode_V = header_byte lsr 4 in
 				let den_shift_V = header_byte land 0xf in
@@ -242,6 +245,7 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				let pb_factor_V = header_byte lsr 5 in
 				let num_V = header_byte land 0x1f in
 
+				Printf.printf "reading %d coefficients for right channel\n%!" num_V;
 				for i = 0 to num_U - 1 do
 					coefs_V.{i} <- BitBuffer.read bits 16;
 				done;
@@ -256,8 +260,10 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				(* set_ag_params( &agParams, mConfig.mb, (pb * pbFactorU) / 4, mConfig.kb, numSamples, numSamples, mConfig.maxRun ) *)
 				let ag_params = AdaptiveGolomb.make_params !config.mb ((pb * pb_factor_U) / 4) !config.kb num_samples num_samples !config.max_run in
 				(* dyn_decomp( &agParams, bits, mPredictor, numSamples, chanBits, &bits1 ) *)
+				Printf.printf "decompress and run predictor for left channel...\n%!";
 				AdaptiveGolomb.dyn_decomp ag_params bits !predictor num_samples chan_bits;
 
+				Printf.printf "unblocking... modeU = %d\n%!" mode_U;
 				if mode_U = 0 then begin
 					DynamicPredictor.unpc_block !predictor !mix_buffer_U num_samples coefs_U num_U chan_bits den_shift_U;
 				end else begin
@@ -268,8 +274,10 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 
 				(* decompress and run predictor for "right" channel -- U => V *)
 				let ag_params = AdaptiveGolomb.make_params !config.mb ((pb * pb_factor_V) / 4) !config.kb num_samples num_samples !config.max_run in
+				Printf.printf "decompress and run predictor for right channel...\n%!";
 				AdaptiveGolomb.dyn_decomp ag_params bits !predictor num_samples chan_bits;
 
+				Printf.printf "unblocking... modeV = %d\n%!" mode_U;
 				if mode_V = 0 then begin
 					DynamicPredictor.unpc_block !predictor !mix_buffer_V num_samples coefs_V num_V chan_bits den_shift_V;
 				end else begin
@@ -278,6 +286,7 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				end;
 			end else begin
 				(* uncompressed frame, copy data into the mix buffers to use common output code *)
+				Printf.printf "uncompressed frame... with %d samples\n%!" num_samples;
 				let chan_bits = 16 in (* !config.bit_depth *)
 				let shift = 32 - chan_bits in
 				(* if chan_bits <= 16 *)
@@ -300,6 +309,7 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 			(* now read the shifted values into the shift buffer *)
 			(* if escape_flag <> 0, then don't need to shift *)
 			if escape_flag = 0 && bytes_shifted <> 0 then begin
+				Printf.printf "read the shifted values into shift buffer...\n%!";
 				let shift = bytes_shifted * 8 in
 				(* assert <= 16 *)
 				assert (shift <= 16);
@@ -317,20 +327,28 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 				unmix16 mix_buffer_u mix_buffer_v out16 num_channels num_samples mix_bits mix_res
 			*)
 			let out16 = BigarrayUtils.uint8_to_int16 sample_buffer in
+			Printf.printf "un-mix data and convert to output format...\n%!";
 			Matrix.unmix16 !mix_buffer_U !mix_buffer_V out16 num_channels num_samples !mix_bits !mix_res;
 
 			(* *out_num_samples = num_samples *)
 			out_num_samples := num_samples;
+			Printf.printf "processed %d samples\n%!" num_samples;
+			Printf.printf "bitbuffer position: %d.%d\n%!" bits.BitBuffer.current bits.BitBuffer.bit_index;
+			to_hex (Array1.sub sample_buffer 0 num_samples);
 		| DSE ->
 			(* data stream element -- parse but ignore *)
+			Printf.printf "data stream element\n%!";
 			data_stream_element bits
 		| FIL ->
 			(* fill element -- parse but ignore *)
+			Printf.printf "fill element\n%!";
 			fill_element bits
 		| END ->
+			Printf.printf "end element; byte aligning bit buffer\n%!";
 			BitBuffer.byte_align bits false;
 			raise Done
-		| _ -> ()
+		| x -> failf "unexpected frame element: %d%!" (of_element x)
+		end;
 	done; !out_num_samples with Done -> !out_num_samples
 
 let openfile filename =
@@ -348,13 +366,6 @@ let openfile filename =
 	shift_buffer := BigarrayUtils.int32_to_uint16 !predictor;
 	mdat
 
-let to_hex arr =
-	for i = 0 to Array1.dim arr - 1 do
-		if i mod 16 = 0 then Printf.printf "\n";
-		Printf.printf "%02x " arr.{i};
-	done;
-	Printf.printf "\n"
-
 let to_pcm_data filename =
 	let mdat = openfile filename in (* a bitstring... *)
 	let decode_buffer = Array1.create int8_unsigned c_layout (4096 lsl 6) in
@@ -362,9 +373,11 @@ let to_pcm_data filename =
 	Printf.printf "media data length = %d bytes\n" (Bitstring.bitstring_length mdat / 8);
 	let i = ref 1 in
 	while true do
-		decode bitbuffer decode_buffer (Int32.to_int !config.frame_length) !config.num_channels;
-		Printf.printf "decoded buffer %d\n" !i; incr i;
-		to_hex decode_buffer;
+		try decode bitbuffer decode_buffer (Int32.to_int !config.frame_length) !config.num_channels;
+		Printf.printf "decoded buffer %d\n%!" !i; incr i;
+		with Failure msg ->
+			Printf.printf "WARNING: %s\nskipping frame...\n%!" msg
+		(*to_hex decode_buffer;*)
 	done
 
 let () = to_pcm_data Sys.argv.(1)
