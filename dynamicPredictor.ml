@@ -109,10 +109,13 @@ let unpc_block (pc1 : int32a) (out : int32a) num (coefs : int16a) numactive chan
 			out.{j} <- !prev;
 		done
 	end else begin
+Printf.printf "loop1:\n";
 		for j = 1 to numactive do
 			let del = Int32.add pc1.{j} out.{j-1} in
 			out.{j} <- Int32.shift_right (Int32.shift_left del chanshift) chanshift;
+Printf.printf "%08lx " out.{j};
 		done;
+Printf.printf "\n";
 
 		let lim = numactive + 1 in
 
@@ -141,7 +144,7 @@ let unpc_block (pc1 : int32a) (out : int32a) num (coefs : int16a) numactive chan
 				loop_while (fun _ -> !del0 < 0l) (fun k ->
 					let dd = Int32.sub top out.{j-1-k} in
 					let sgn = sign_of_int dd in
-					coefs.{k} <- coefs.{k} + (Int32.to_int sgn); (***)
+					coefs.{k} <- coefs.{k} + Int32.to_int sgn; (***)
 					del0 := Int32.sub !del0 (Int32.mul (Int32.of_int (numactive - k)) (Int32.shift_right (Int32.mul (Int32.neg sgn) dd) denshift));
 					) (numactive - 1);
 			end;

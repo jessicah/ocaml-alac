@@ -192,9 +192,14 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 	let coefs_V = Array1.create int16_signed c_layout 32 in
 	let mix_bits = ref 0 in
 	let mix_res = ref 0 in
-	try while true do
+	try (*while true do*)
 		let pb = !config.pb in
-		begin match to_element (BitBuffer.read_small bits 3) with
+Printf.printf "first few bytes:\n";
+for i = 0 to 15 do
+	Printf.printf "%02x " (Char.code bits.BitBuffer.buffer.[bits.BitBuffer.current+i]);
+done;
+Printf.printf "\n";
+		begin match to_element ((BitBuffer.read_small bits 3) land 0x7) with
 		| CPE ->
 			Printf.printf "stereo channel pair...\n%!";
 			(* stereo channel pair *)
@@ -241,8 +246,8 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 
 				Printf.printf "reading %d coefficients for left channel\n%!" num_U;
 				for i = 0 to num_U - 1 do
-					coefs_U.{i} <- (BitBuffer.read bits 16) land 0xFFFF;
-					Printf.printf "%04x " (coefs_U.{i} land 0xffff);
+					coefs_U.{i} <- BitBuffer.read bits 16;
+					Printf.printf "%04x " coefs_U.{i};
 				done;
 				Printf.printf "\n";
 		
@@ -364,7 +369,7 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 			raise Done
 		| x -> failf "unexpected frame element: %d%!" (of_element x)
 		end;
-	done; !out_num_samples with Done -> !out_num_samples
+	(*done;*) !out_num_samples with Done -> !out_num_samples
 
 let openfile filename =
 	let cookie, mdat = Mp4.openfile filename in

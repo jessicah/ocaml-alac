@@ -147,20 +147,23 @@ let dyn_decomp params bitstream (pc : int32a) num_samples max_size =
 	let in' = BigarrayUtils.int32_to_uint8 pc in*)
 	(* bitstream is a BitBuffer *)
 	let in' = BigarrayUtils.from_string (bitstream.BitBuffer.buffer) in
-	let bit_pos = ref (bitstream.BitBuffer.current + bitstream.BitBuffer.bit_index) in
+	let bit_pos = ref (bitstream.BitBuffer.current * 8 + bitstream.BitBuffer.bit_index) in
+	let start_pos = !bit_pos in
 	let out = ref 0 in
+Printf.printf "dyn_decomp:\n";
+for i = 0 to 16 * 8 - 1 do
+	Printf.printf "%02x " (Char.code bitstream.BitBuffer.buffer.[bitstream.BitBuffer.current+i]);
+	if (i+1) mod 16 = 0 then Printf.printf "\n";
+done;
 	while !c < num_samples do
-		(*Printf.printf "dyn_decomp: %d of %d samples%!" !c num_samples;*)
 		let m = shift_right !mb qbshift in
 		let k = lg3a m in
-		(*Printf.printf " => lg3a%!";*)
-
+(*Printf.printf "k: %x, " k;*)
 		let k = if k < kb_local then k else kb_local in
 		let m = sub (shift_left one k) one in
 		
-		let n = zero in (* dyn_get_32bit (in, &bitPos, m, k, max_size) *)
 		let newpos, n = dyn_get_32bit in' !bit_pos m k max_size in
-		(*Printf.printf " => dyn_get_32bit%!";*)
+(*Printf.printf "n: %lx, " n;*)
 		bit_pos := newpos;
 
 		let ndecode = add n !zmode in
@@ -171,6 +174,7 @@ let dyn_decomp params bitstream (pc : int32a) num_samples max_size =
 
 		(* *outPtr++ = del; *)
 		pc.{!out} <- del; incr out;
+		(*Printf.printf "del: %08lx\n" del;*)
 
 		incr c;
 
@@ -190,9 +194,7 @@ let dyn_decomp params bitstream (pc : int32a) num_samples max_size =
 			(*let mz = ((1 lsl k)-1) land wb_local in*)
 			let mz = logand (sub (shift_left one k) one) wb_local in
 
-			let n = 0 in (* dyn_get (in, &bitPos, mz, k) *)
 			let newpos, n = dyn_get in' !bit_pos mz k in
-			(*Printf.printf " => dyn_get(%ld)%!" n;*)
 			bit_pos := newpos;
 
 			begin try for j = 0 to to_int n - 1 do
@@ -205,8 +207,6 @@ let dyn_decomp params bitstream (pc : int32a) num_samples max_size =
 
 			mb := zero;
 		end;
-		(*Printf.printf ".\n%!";*)
 	done;
-
-	(*BitBuffer.advance bitstream (bit_pos - start_pos)*)
-	BitBuffer.advance bitstream !bit_pos
+Printf.printf "advance by => %d\n" (!bit_pos - start_pos);
+	BitBuffer.advance bitstream (!bit_pos - start_pos)
