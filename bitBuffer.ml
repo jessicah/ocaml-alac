@@ -41,6 +41,7 @@ let read bits num_bits =
 let read_small bits num_bits =
 	let result = ((get bits 0) lsl 8) lor ((get bits 1)) in
 	let result = result lsl bits.bit_index in
+	let result = result land 0xFFFF in
 
 	bits.bit_index <- bits.bit_index + num_bits;
 

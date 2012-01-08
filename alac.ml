@@ -199,7 +199,7 @@ for i = 0 to 15 do
 	Printf.printf "%02x " (Char.code bits.BitBuffer.buffer.[bits.BitBuffer.current+i]);
 done;
 Printf.printf "\n";
-		begin match to_element ((BitBuffer.read_small bits 3) land 0x7) with
+		begin match to_element (BitBuffer.read_small bits 3) with
 		| CPE ->
 			Printf.printf "stereo channel pair...\n%!";
 			(* stereo channel pair *)
