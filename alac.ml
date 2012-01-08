@@ -194,11 +194,11 @@ let decode bits (sample_buffer : ArrayTypes.uint8a) num_samples num_channels =
 	let mix_res = ref 0 in
 	try (*while true do*)
 		let pb = !config.pb in
-Printf.printf "first few bytes:\n";
+(*Printf.printf "first few bytes:\n";
 for i = 0 to 15 do
 	Printf.printf "%02x " (Char.code bits.BitBuffer.buffer.[bits.BitBuffer.current+i]);
 done;
-Printf.printf "\n";
+Printf.printf "\n";*)
 		begin match to_element (BitBuffer.read_small bits 3) with
 		| CPE ->
 			Printf.printf "stereo channel pair...\n%!";
@@ -260,7 +260,7 @@ Printf.printf "\n";
 				let num_V = header_byte land 0x1f in
 
 				Printf.printf "reading %d coefficients for right channel\n%!" num_V;
-				for i = 0 to num_U - 1 do
+				for i = 0 to num_V - 1 do
 					coefs_V.{i} <- BitBuffer.read bits 16;
 					Printf.printf "%04x " coefs_V.{i};
 				done;
@@ -392,12 +392,23 @@ let to_pcm_data filename =
 	let bitbuffer = BitBuffer.from_bitstring mdat in
 	Printf.printf "media data length = %d bytes\n" (Bitstring.bitstring_length mdat / 8);
 	let i = ref 1 in
-	while true do
-		try decode bitbuffer decode_buffer (Int32.to_int !config.frame_length) !config.num_channels;
+	let more = ref true in
+	let oc = open_out_bin "pcm.raw" in
+	while !more do
+		try let decoded = decode bitbuffer decode_buffer (Int32.to_int !config.frame_length) !config.num_channels in
 		Printf.printf "decoded buffer %d\n%!" !i; incr i;
+		if bitbuffer.BitBuffer.current >= bitbuffer.BitBuffer.byte_size then begin
+			Printf.printf "done!\n";
+			more := false;
+		end;
+		(* not terribly efficient... *)
+		for i = 0 to (decoded * !config.num_channels * !config.bit_depth / 8) - 1 do
+			output_byte oc decode_buffer.{i};
+		done;
 		with Failure msg ->
 			Printf.printf "WARNING: %s\nskipping frame...\n%!" msg
 		(*to_hex decode_buffer;*)
-	done
+	done;
+	close_out oc
 
 let () = to_pcm_data Sys.argv.(1)

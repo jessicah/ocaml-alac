@@ -50,81 +50,88 @@ let lead m =
 let lg3a x =
   31 - lead (add x (of_int 3))
 
-let read32bit (buf : uint8a) n =
-  let read32 i s k = logor (shift_left (of_int (buf.{n+i})) s) k in
-  read32 0 24 (read32 1 16 (read32 2 8 (read32 3 0 zero)))
-
 let get_next_fromlong inlong suff =
   shift_right_logical inlong (32 - suff)
 
-let getstreambits (buf : uint8a) bitoffset numbits =
-  let byteoffset = bitoffset / 8 in
+let peek_32 bits =
+	let read_k i s k = logor (shift_left (of_int (Char.code bits.BitBuffer.buffer.[bits.BitBuffer.current+i])) s) k in
+	read_k 0 24 (read_k 1 16 (read_k 2 8 (read_k 3 0 zero)))
 
-	let load1 = read32bit buf byteoffset in
-
-	let result = if (numbits + (bitoffset land 0x7)) > 32 then begin
-			let result = shift_left load1 (bitoffset land 0x7) in
-			let load2 = of_int buf.{byteoffset + 4} in
-			let load2shift = 8 - (numbits + (bitoffset land 0x7)-32) in
-			let load2 = shift_right_logical load2 load2shift in
-			let result = shift_right_logical result (32-numbits) in
-			logor result load2
-		end else begin
-			shift_right_logical load1 (32-numbits-(bitoffset land 0x7))
-		end
-	in
+let peek_big bits numbits =
+	let load1 = peek_32 bits in
+	let result = if (numbits + bits.BitBuffer.bit_index) > 32 then begin
+		let result = shift_left load1 bits.BitBuffer.bit_index in
+		let load2 = of_int (Char.code bits.BitBuffer.buffer.[bits.BitBuffer.current+4]) in
+		let load2shift = 8 - (numbits+bits.BitBuffer.bit_index-32) in
+		let load2 = shift_right_logical load2 load2shift in
+		let result = shift_right_logical result (32-numbits) in
+		logor result load2
+	end else begin
+		shift_right_logical load1 (32-numbits-bits.BitBuffer.bit_index)
+	end in
 	if numbits <> 32 then
 		logand result (lognot (shift_left 0xffff_ffffl numbits))
 	else result
 
-(* k is used as a shift amount so has to be small, hence not an int32 *)
-let dyn_get (buf : uint8a) (bitPos : int) (m : int32) (k : int) =
-  let max_prefix_16 = 9
-  and max_datatype_bits_16 = 16
-  and streamlong =
-    shift_left (read32bit buf (bitPos lsr 3))
-      (bitPos land 7) in
-	(*Printf.printf ">>>%!";*)
-  let pre = lead (lognot streamlong)
-  in
-	(*Printf.printf "<<<%!";*)
-  if pre >= max_prefix_16
-  then
-    let pre = max_prefix_16 in
-    let bitPos = bitPos + (pre + max_datatype_bits_16) in
-    let streamlong = shift_left streamlong pre
-    in (bitPos, get_next_fromlong streamlong max_datatype_bits_16)
-  else
-    let bitPos = bitPos + (pre + k + 1) in
-    let streamlong = shift_left streamlong (pre + 1) in
-    let v = get_next_fromlong streamlong k in
-    if v < of_int 2
-    then (bitPos-1, mul (of_int pre) m)
-    else (bitPos, add (mul (of_int pre) m) (pred v))
+let read_big bits numbits =
+	let r = peek_big bits numbits in
+	BitBuffer.advance bits numbits;
+	r
 
-let dyn_get_32bit (buf : uint8a) (bitPos : int) (m : int32) (k : int) (maxbits : int) =
-  let max_prefix_32 = 9
-  and streamlong =
-    shift_left (read32bit buf (bitPos lsr 3))
-      (bitPos land 7) in
-  let result = lead (lognot streamlong)
-  in
-  if result >= max_prefix_32
-  then
-    let result = getstreambits buf (bitPos + max_prefix_32) maxbits
-    in bitPos + (maxbits + max_prefix_32), result
-  else
-    let bitPos = bitPos + (result + 1) in
-    if k <> 1
-    then
-      let streamlong = shift_left streamlong (result+1) in
-      let v = get_next_fromlong streamlong k in
-      let bitPos = bitPos + (k-1) in
-      let result = mul (of_int result) m in
-      if v >= of_int 2
-      then (bitPos+1, add result (pred v))
-      else (bitPos, result)
-    else (bitPos, of_int result)
+(* k is used as a shift amount so has to be small, hence not an int32 *)
+let dyn_get bits (m : int32) (k : int) =
+	let max_prefix_16 = 9 in
+	let max_datatype_bits_16 = 16 in
+
+	let bit_offset = bits.BitBuffer.bit_index in
+	let stream = shift_left (peek_big bits (32-bit_offset)) bit_offset in
+	let prefix = lead (lognot stream) in
+
+	if prefix >= max_prefix_16 then begin
+		BitBuffer.advance bits (max_prefix_16 + max_datatype_bits_16);
+		let stream = shift_left stream max_prefix_16 in
+		shift_right_logical stream (32 - max_datatype_bits_16)
+	end else begin
+		BitBuffer.advance bits (prefix + k);
+
+		let stream = shift_left stream (prefix + 1) in
+		let v = shift_right_logical stream (32-k) in
+		let result = mul (of_int prefix) m in
+		if v < 2l then
+			result
+		else begin
+			BitBuffer.advance bits 1;
+			add result (sub v one)
+		end
+	end
+
+let dyn_get_32bit bits (m : int32) (k : int) (maxbits : int) =
+	(* constant *) let max_prefix_32 = 9 in
+
+	let bit_offset = bits.BitBuffer.bit_index in
+	let stream = shift_left (peek_big bits (32-bit_offset)) bit_offset in
+	let result = lead (lognot stream) in
+	
+	if result >= max_prefix_32 then begin
+		BitBuffer.advance bits max_prefix_32;
+		read_big bits maxbits;
+	end else begin
+		BitBuffer.advance bits (result + 1);
+
+		if k <> 1 then begin
+			let stream = shift_left stream ( result + 1) in
+			let result = mul (of_int result) m in
+			let v = shift_right_logical stream (32-k) in
+			BitBuffer.advance bits (k-1);
+			if v > one then begin
+				let result = add result (sub v one) in
+				BitBuffer.advance bits 1;
+				result
+			end else begin
+				result
+			end
+		end else of_int result
+	end
 
 let qbshift = 9
 let qb = shift_left one qbshift
@@ -143,28 +150,21 @@ let dyn_decomp params bitstream (pc : int32a) num_samples max_size =
 	let pb_local = params.pb in
 	let kb_local = to_int params.kb in
 	let wb_local = params.wb in
-	(*let bit_pos = ref 0 in
-	let in' = BigarrayUtils.int32_to_uint8 pc in*)
-	(* bitstream is a BitBuffer *)
-	let in' = BigarrayUtils.from_string (bitstream.BitBuffer.buffer) in
-	let bit_pos = ref (bitstream.BitBuffer.current * 8 + bitstream.BitBuffer.bit_index) in
-	let start_pos = !bit_pos in
 	let out = ref 0 in
-Printf.printf "dyn_decomp:\n";
+(*Printf.printf "dyn_decomp:\n";
 for i = 0 to 16 * 8 - 1 do
 	Printf.printf "%02x " (Char.code bitstream.BitBuffer.buffer.[bitstream.BitBuffer.current+i]);
 	if (i+1) mod 16 = 0 then Printf.printf "\n";
-done;
+done;*)
 	while !c < num_samples do
-		let m = shift_right !mb qbshift in
+		let m = shift_right_logical !mb qbshift in
 		let k = lg3a m in
 (*Printf.printf "k: %x, " k;*)
 		let k = if k < kb_local then k else kb_local in
 		let m = sub (shift_left one k) one in
 		
-		let newpos, n = dyn_get_32bit in' !bit_pos m k max_size in
+		let n = dyn_get_32bit bitstream m k max_size in
 (*Printf.printf "n: %lx, " n;*)
-		bit_pos := newpos;
 
 		let ndecode = add n !zmode in
 		let multiplier = neg (logand ndecode one) (*-(ndecode land 1)*) in
@@ -194,8 +194,7 @@ done;
 			(*let mz = ((1 lsl k)-1) land wb_local in*)
 			let mz = logand (sub (shift_left one k) one) wb_local in
 
-			let newpos, n = dyn_get in' !bit_pos mz k in
-			bit_pos := newpos;
+			let n = dyn_get bitstream mz k in
 
 			begin try for j = 0 to to_int n - 1 do
 				(* *outPtr++ = 0; *)
@@ -207,6 +206,4 @@ done;
 
 			mb := zero;
 		end;
-	done;
-Printf.printf "advance by => %d\n" (!bit_pos - start_pos);
-	BitBuffer.advance bitstream (!bit_pos - start_pos)
+	done
